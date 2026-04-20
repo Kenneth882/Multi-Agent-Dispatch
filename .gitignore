@@ -1,0 +1,10 @@
+.vscode
+.env
+venv/
+__pycache__/
+*.pyc
+data/raw/
+data/processed/
+*.parquet
+*.zip
+.DS_Store
