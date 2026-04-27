@@ -1,0 +1,7 @@
+pandas
+geopandas
+pyarrow
+numpy
+pettingzoo
+gymnasium
+matplotlib
