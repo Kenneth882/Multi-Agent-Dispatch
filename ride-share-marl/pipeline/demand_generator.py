@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import os
 
 GRID_SIZE = 10
 
@@ -55,22 +56,25 @@ def get_demand_snapshot(hour, day_of_week, n_samples=10):
     ]].reset_index(drop=True)
 
 
-def get_spawn_weights(grid_size=GRID_SIZE):
+def get_spawn_weights(grid_size=GRID_SIZE, cache_path="data/processed/spawn_weights.npy"):
     """
     Compute probability of passenger spawning in each grid cell
     based on historical pickup frequency from TLC data.
     """
+    if os.path.exists(cache_path):
+        return np.load(cache_path)
+
     df = pd.read_parquet("data/processed/manhattan_trips.parquet")
     zone_map = build_zone_grid_map()
 
-    df["pickup_row"] = df["PULocationID"].apply(lambda z: zone_to_grid(z, zone_map)[0])
-    df["pickup_col"] = df["PULocationID"].apply(lambda z: zone_to_grid(z, zone_map)[1])
+    rows = df["PULocationID"].map(lambda z: zone_map.get(int(z), (0, 0))[0]).to_numpy()
+    cols = df["PULocationID"].map(lambda z: zone_map.get(int(z), (0, 0))[1]).to_numpy()
 
     weight_grid = np.zeros((grid_size, grid_size))
-    for _, row in df.iterrows():
-        weight_grid[int(row["pickup_row"])][int(row["pickup_col"])] += 1
-
+    np.add.at(weight_grid, (rows, cols), 1)
     weight_grid = weight_grid / weight_grid.sum()
+
+    np.save(cache_path, weight_grid)
     return weight_grid
 
 
