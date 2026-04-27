@@ -1,0 +1,74 @@
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import numpy as np
+from stable_baselines3 import PPO
+from env.ride_share_env import RideShareEnv, MAX_STEPS, PASSENGERS_PER_STEP
+
+EPISODES = 10
+MODEL_PATH = "results/baseline_ppo"
+
+model = PPO.load(MODEL_PATH)
+results = []
+
+for ep in range(EPISODES):
+    env = RideShareEnv()
+    obs, _ = env.reset(seed=ep)
+
+    total_pickups = 0
+    total_wait   = 0
+    total_steps_with_passenger = {a: 0 for a in env.agents}
+    passenger_spawn_step = {}
+    step = 0
+
+    # Track when each passenger spawned
+    for p in env.passengers:
+        passenger_spawn_step[p] = 0
+
+    while env.agents:
+        actions = {}
+        for agent in env.agents:
+            action, _ = model.predict(obs[agent], deterministic=True)
+            actions[agent] = int(action)
+
+        prev_passengers = set(env.passengers)
+        obs, rewards, terminations, truncations, _ = env.step(actions)
+        step += 1
+
+        # Track new spawns
+        for p in env.passengers:
+            if p not in passenger_spawn_step:
+                passenger_spawn_step[p] = step
+
+        # Measure wait time for picked-up passengers
+        picked_up = prev_passengers - env.passengers
+        for p in picked_up:
+            if p in passenger_spawn_step:
+                total_wait += step - passenger_spawn_step[p]
+                total_pickups += 1
+
+        # Track utilization (steps where agent earned a pickup reward)
+        for agent, r in rewards.items():
+            if r > 0:
+                total_steps_with_passenger[agent] += 1
+
+    total_spawned = MAX_STEPS * PASSENGERS_PER_STEP
+    avg_wait         = total_wait / total_pickups if total_pickups > 0 else float("inf")
+    response_rate    = total_pickups / total_spawned
+    utilization      = sum(total_steps_with_passenger.values()) / (len(total_steps_with_passenger) * MAX_STEPS)
+
+    results.append({
+        "pickups": total_pickups,
+        "avg_wait": avg_wait,
+        "response_rate": response_rate,
+        "utilization": utilization,
+    })
+
+    print(f"Episode {ep+1:>2} | Pickups: {total_pickups:>4} | Avg Wait: {avg_wait:.1f} steps | Response Rate: {response_rate:.2%} | Utilization: {utilization:.2%}")
+
+print("\n--- Baseline Results (avg over 10 episodes) ---")
+print(f"Average Pickups:       {np.mean([r['pickups'] for r in results]):.1f}")
+print(f"Avg Wait Time:         {np.mean([r['avg_wait'] for r in results]):.2f} steps")
+print(f"Order Response Rate:   {np.mean([r['response_rate'] for r in results]):.2%}")
+print(f"Vehicle Utilization:   {np.mean([r['utilization'] for r in results]):.2%}")
