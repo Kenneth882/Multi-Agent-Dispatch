@@ -5,3 +5,5 @@ numpy
 pettingzoo
 gymnasium
 matplotlib
+stable-baselines3
+torch
