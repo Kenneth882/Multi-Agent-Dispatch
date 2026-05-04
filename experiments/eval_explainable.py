@@ -9,7 +9,7 @@ from explanations.explain import generate_step_explanations
 from explanations.consistency_check import ConsistencyChecker
 
 EPISODES = 10
-MODEL_PATH = "results/baseline_ppo"
+MODEL_PATH = "results/explainable_ppo"
 
 model = PPO.load(MODEL_PATH)
 results = []
@@ -17,7 +17,7 @@ results = []
 for ep in range(EPISODES):
     env = RideShareEnv()
     obs, _ = env.reset(seed=ep)
-    checker = ConsistencyChecker()  # fresh checker per episode
+    checker = ConsistencyChecker()
 
     total_pickups = 0
     total_wait = 0
@@ -34,7 +34,7 @@ for ep in range(EPISODES):
             action, _ = model.predict(obs[agent], deterministic=True)
             actions[agent] = int(action)
 
-        explanations = generate_step_explanations(env, actions)  # before env.step
+        explanations = generate_step_explanations(env, actions)
         checker.log_step(explanations)
 
         prev_passengers = set(env.passengers)
@@ -59,7 +59,6 @@ for ep in range(EPISODES):
     avg_wait = total_wait / total_pickups if total_pickups > 0 else float("inf")
     response_rate = total_pickups / total_spawned
     utilization = sum(total_steps_with_passenger.values()) / (len(total_steps_with_passenger) * MAX_STEPS)
-
     consistency = checker.consistency_score()
 
     results.append({
@@ -72,11 +71,11 @@ for ep in range(EPISODES):
 
     print(f"Episode {ep+1:>2} | Pickups: {total_pickups:>4} | Avg Wait: {avg_wait:.1f} steps | Response Rate: {response_rate:.2%} | Utilization: {utilization:.2%} | Consistency: {consistency:.2%}")
 
-print("\n--- Baseline Results (avg over 10 episodes) ---")
-print(f"Average Pickups:       {np.mean([r['pickups'] for r in results]):.1f}")
-print(f"Avg Wait Time:         {np.mean([r['avg_wait'] for r in results]):.2f} steps")
-print(f"Order Response Rate:   {np.mean([r['response_rate'] for r in results]):.2%}")
-print(f"Vehicle Utilization:   {np.mean([r['utilization'] for r in results]):.2%}")
+print("\n--- Explainable Model Results (avg over 10 episodes) ---")
+print(f"Average Pickups:         {np.mean([r['pickups'] for r in results]):.1f}")
+print(f"Avg Wait Time:           {np.mean([r['avg_wait'] for r in results]):.2f} steps")
+print(f"Order Response Rate:     {np.mean([r['response_rate'] for r in results]):.2%}")
+print(f"Vehicle Utilization:     {np.mean([r['utilization'] for r in results]):.2%}")
 print(f"Explanation Consistency: {np.mean([r['consistency'] for r in results]):.2%}")
 
-checker.save()
+checker.save("results/explainable_consistency_report.json")
