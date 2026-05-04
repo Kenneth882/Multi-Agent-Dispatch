@@ -3,33 +3,23 @@ import numpy as np
 import os
 
 GRID_SIZE = 10
+DATA_PATH = "ride-share-marl/data/processed/manhattan_trips.parquet"
+CACHE_PATH = "ride-share-marl/data/processed/spawn_weights.npy"
 
 def zone_to_grid(zone_id, zone_grid_map):
-    """Map a TLC zone ID to a grid cell using precomputed mapping."""
     return zone_grid_map.get(int(zone_id), (0, 0))
 
 def build_zone_grid_map(grid_size=GRID_SIZE):
-    """
-    Build a mapping from TLC zone ID to grid cell.
-    Manhattan has 69 zones, we distribute them across the grid
-    based on their zone ID range.
-    """
-    # Manhattan zone IDs range roughly from 1 to 263
-    # We map them to a 10x10 grid based on position
     zone_map = {}
     manhattan_zone_ids = list(range(1, 264))
-    
     for i, zone_id in enumerate(manhattan_zone_ids):
         row = (i // grid_size) % grid_size
         col = i % grid_size
         zone_map[zone_id] = (row, col)
-    
     return zone_map
 
-
 def get_demand_snapshot(hour, day_of_week, n_samples=10):
-    """Sample n ride requests from a given hour and day."""
-    df = pd.read_parquet("data/processed/manhattan_trips.parquet")
+    df = pd.read_parquet(DATA_PATH)
     df["tpep_pickup_datetime"] = pd.to_datetime(df["tpep_pickup_datetime"])
 
     subset = df[
@@ -55,16 +45,11 @@ def get_demand_snapshot(hour, day_of_week, n_samples=10):
         "trip_distance"
     ]].reset_index(drop=True)
 
-
-def get_spawn_weights(grid_size=GRID_SIZE, cache_path="data/processed/spawn_weights.npy"):
-    """
-    Compute probability of passenger spawning in each grid cell
-    based on historical pickup frequency from TLC data.
-    """
+def get_spawn_weights(grid_size=GRID_SIZE, cache_path=CACHE_PATH):
     if os.path.exists(cache_path):
         return np.load(cache_path)
 
-    df = pd.read_parquet("data/processed/manhattan_trips.parquet")
+    df = pd.read_parquet(DATA_PATH)
     zone_map = build_zone_grid_map()
 
     rows = df["PULocationID"].map(lambda z: zone_map.get(int(z), (0, 0))[0]).to_numpy()
@@ -77,14 +62,11 @@ def get_spawn_weights(grid_size=GRID_SIZE, cache_path="data/processed/spawn_weig
     np.save(cache_path, weight_grid)
     return weight_grid
 
-
 def get_hourly_spawn_rate():
-    """Returns average number of ride requests per hour."""
-    df = pd.read_parquet("data/processed/manhattan_trips.parquet")
+    df = pd.read_parquet(DATA_PATH)
     df["hour"] = pd.to_datetime(df["tpep_pickup_datetime"]).dt.hour
     hourly_rate = df.groupby("hour").size() / df["hour"].nunique()
     return hourly_rate.to_dict()
-
 
 if __name__ == "__main__":
     print("=== Demand Snapshot (Monday 9am) ===")
