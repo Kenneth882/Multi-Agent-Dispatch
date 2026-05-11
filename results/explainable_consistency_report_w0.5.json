@@ -1,0 +1,11 @@
+{
+  "consistency_score": 0.7717,
+  "total_explanations_logged": 4000,
+  "total_unique_states": 205,
+  "reason_distribution": {
+    "available": 257,
+    "closest": 1279,
+    "idle_reduction": 2464
+  },
+  "inconsistent_state_count": 35
+}

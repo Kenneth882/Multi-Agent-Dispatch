@@ -1,0 +1,94 @@
+{
+  "model": "explainable_w0.1",
+  "consistency_weight": 0.1,
+  "episodes": [
+    {
+      "pickups": 26,
+      "avg_wait": 41.42307692307692,
+      "response_rate": 0.043333333333333335,
+      "utilization": 0.008,
+      "detour_ratio": 1.6153846153846154,
+      "consistency": 0.9585663446873411
+    },
+    {
+      "pickups": 57,
+      "avg_wait": 33.228070175438596,
+      "response_rate": 0.095,
+      "utilization": 0.016,
+      "detour_ratio": 1.7543859649122806,
+      "consistency": 0.9429880376686179
+    },
+    {
+      "pickups": 16,
+      "avg_wait": 34.0625,
+      "response_rate": 0.02666666666666667,
+      "utilization": 0.004,
+      "detour_ratio": 1.5,
+      "consistency": 0.997181655137074
+    },
+    {
+      "pickups": 20,
+      "avg_wait": 33.0,
+      "response_rate": 0.03333333333333333,
+      "utilization": 0.00575,
+      "detour_ratio": 1.4,
+      "consistency": 0.9854554733350345
+    },
+    {
+      "pickups": 60,
+      "avg_wait": 38.11666666666667,
+      "response_rate": 0.1,
+      "utilization": 0.0165,
+      "detour_ratio": 1.75,
+      "consistency": 0.9483640081799591
+    },
+    {
+      "pickups": 43,
+      "avg_wait": 20.767441860465116,
+      "response_rate": 0.07166666666666667,
+      "utilization": 0.01175,
+      "detour_ratio": 1.744186046511628,
+      "consistency": 0.9716039907904835
+    },
+    {
+      "pickups": 38,
+      "avg_wait": 35.5,
+      "response_rate": 0.06333333333333334,
+      "utilization": 0.0115,
+      "detour_ratio": 1.7105263157894737,
+      "consistency": 0.9857324840764331
+    },
+    {
+      "pickups": 18,
+      "avg_wait": 70.61111111111111,
+      "response_rate": 0.03,
+      "utilization": 0.005,
+      "detour_ratio": 1.2777777777777777,
+      "consistency": 0.9898141074611663
+    },
+    {
+      "pickups": 17,
+      "avg_wait": 51.470588235294116,
+      "response_rate": 0.028333333333333332,
+      "utilization": 0.00425,
+      "detour_ratio": 1.2941176470588236,
+      "consistency": 0.9900990099009901
+    },
+    {
+      "pickups": 29,
+      "avg_wait": 50.13793103448276,
+      "response_rate": 0.04833333333333333,
+      "utilization": 0.0085,
+      "detour_ratio": 1.5862068965517242,
+      "consistency": 0.9926377253109926
+    }
+  ],
+  "averages": {
+    "avg_pickups": 32.4,
+    "avg_wait": 40.8317,
+    "response_rate": 0.054,
+    "utilization": 0.0091,
+    "detour_ratio": 1.5633,
+    "consistency": 0.9762
+  }
+}

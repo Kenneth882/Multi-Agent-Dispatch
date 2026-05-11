@@ -1,0 +1,93 @@
+{
+  "model": "baseline",
+  "episodes": [
+    {
+      "pickups": 35,
+      "avg_wait": 70.11428571428571,
+      "response_rate": 0.058333333333333334,
+      "utilization": 0.01,
+      "detour_ratio": 1.7142857142857142,
+      "consistency": 0.9494694290045478
+    },
+    {
+      "pickups": 119,
+      "avg_wait": 72.10084033613445,
+      "response_rate": 0.19833333333333333,
+      "utilization": 0.03225,
+      "detour_ratio": 1.9327731092436975,
+      "consistency": 0.9639227642276422
+    },
+    {
+      "pickups": 152,
+      "avg_wait": 57.35526315789474,
+      "response_rate": 0.25333333333333335,
+      "utilization": 0.0415,
+      "detour_ratio": 1.9407894736842106,
+      "consistency": 0.9536440896214268
+    },
+    {
+      "pickups": 186,
+      "avg_wait": 73.01612903225806,
+      "response_rate": 0.31,
+      "utilization": 0.0515,
+      "detour_ratio": 1.9516129032258065,
+      "consistency": 0.935973257906917
+    },
+    {
+      "pickups": 166,
+      "avg_wait": 88.07228915662651,
+      "response_rate": 0.27666666666666667,
+      "utilization": 0.0445,
+      "detour_ratio": 1.8734939759036144,
+      "consistency": 0.8679100664282065
+    },
+    {
+      "pickups": 142,
+      "avg_wait": 77.59859154929578,
+      "response_rate": 0.23666666666666666,
+      "utilization": 0.03925,
+      "detour_ratio": 1.9225352112676057,
+      "consistency": 0.8383812674980912
+    },
+    {
+      "pickups": 80,
+      "avg_wait": 50.2625,
+      "response_rate": 0.13333333333333333,
+      "utilization": 0.02125,
+      "detour_ratio": 1.7375,
+      "consistency": 0.9631713554987212
+    },
+    {
+      "pickups": 104,
+      "avg_wait": 73.32692307692308,
+      "response_rate": 0.17333333333333334,
+      "utilization": 0.02825,
+      "detour_ratio": 1.8173076923076923,
+      "consistency": 0.7587430309173847
+    },
+    {
+      "pickups": 188,
+      "avg_wait": 75.48936170212765,
+      "response_rate": 0.31333333333333335,
+      "utilization": 0.0505,
+      "detour_ratio": 1.9308510638297873,
+      "consistency": 0.856340903291656
+    },
+    {
+      "pickups": 143,
+      "avg_wait": 69.42657342657343,
+      "response_rate": 0.23833333333333334,
+      "utilization": 0.039,
+      "detour_ratio": 1.979020979020979,
+      "consistency": 0.9690457917625991
+    }
+  ],
+  "averages": {
+    "avg_pickups": 131.5,
+    "avg_wait": 70.6763,
+    "response_rate": 0.2192,
+    "utilization": 0.0358,
+    "detour_ratio": 1.88,
+    "consistency": 0.9057
+  }
+}
