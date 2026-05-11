@@ -1,5 +1,6 @@
 import sys
 import os
+import argparse
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
@@ -9,7 +10,12 @@ from explanations.explain import generate_step_explanations
 from explanations.consistency_check import ConsistencyChecker
 
 EPISODES = 10
-MODEL_PATH = "results/explainable_ppo"
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--weight", type=float, default=0.1, help="Consistency reward weight used during training")
+args = parser.parse_args()
+
+MODEL_PATH = f"results/explainable_ppo_w{args.weight}"
 
 model = PPO.load(MODEL_PATH)
 results = []
@@ -71,11 +77,11 @@ for ep in range(EPISODES):
 
     print(f"Episode {ep+1:>2} | Pickups: {total_pickups:>4} | Avg Wait: {avg_wait:.1f} steps | Response Rate: {response_rate:.2%} | Utilization: {utilization:.2%} | Consistency: {consistency:.2%}")
 
-print("\n--- Explainable Model Results (avg over 10 episodes) ---")
+print(f"\n--- Explainable Model Results (weight={args.weight}, avg over 10 episodes) ---")
 print(f"Average Pickups:         {np.mean([r['pickups'] for r in results]):.1f}")
 print(f"Avg Wait Time:           {np.mean([r['avg_wait'] for r in results]):.2f} steps")
 print(f"Order Response Rate:     {np.mean([r['response_rate'] for r in results]):.2%}")
 print(f"Vehicle Utilization:     {np.mean([r['utilization'] for r in results]):.2%}")
 print(f"Explanation Consistency: {np.mean([r['consistency'] for r in results]):.2%}")
 
-checker.save("results/explainable_consistency_report.json")
+checker.save(f"results/explainable_consistency_report_w{args.weight}.json")

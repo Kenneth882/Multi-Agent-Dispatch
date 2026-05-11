@@ -1,5 +1,6 @@
 import sys
 import os
+import argparse
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
@@ -12,18 +13,17 @@ from explanations.explain import generate_step_explanations
 from explanations.consistency_check import ConsistencyChecker
 
 TIMESTEPS = 200_000
-SAVE_PATH = "results/explainable_ppo"
-CONSISTENCY_REWARD_WEIGHT = 0.5
 
 
 class ExplainableAgentWrapper(gym.Env):
-    def __init__(self):
+    def __init__(self, consistency_weight=0.1):
         super().__init__()
         self.env = RideShareEnv()
         self.observation_space = spaces.Box(low=0.0, high=1.0, shape=(202,), dtype=np.float32)
         self.action_space = spaces.Discrete(5)
         self.checker = ConsistencyChecker()
         self._step_count = 0
+        self.consistency_weight = consistency_weight
 
     def reset(self, seed=None, options=None):
         self.obs, _ = self.env.reset(seed=seed)
@@ -47,7 +47,7 @@ class ExplainableAgentWrapper(gym.Env):
         base_reward = rewards.get(agent, 0.0)
 
         consistency = self.checker.consistency_score()
-        consistency_bonus = CONSISTENCY_REWARD_WEIGHT * consistency
+        consistency_bonus = self.consistency_weight * consistency
 
         reward = base_reward + consistency_bonus
 
@@ -81,17 +81,21 @@ class ExplainableAgentWrapper(gym.Env):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--weight", type=float, default=0.1, help="Consistency reward weight (default: 0.1)")
+    args = parser.parse_args()
+
+    save_path = f"results/explainable_ppo_w{args.weight}"
     os.makedirs("results", exist_ok=True)
 
-    env = ExplainableAgentWrapper()
+    env = ExplainableAgentWrapper(consistency_weight=args.weight)
     check_env(env, warn=True)
 
-    print("Training explainable PPO agent with consistency reward...")
-    print(f"Consistency reward weight: {CONSISTENCY_REWARD_WEIGHT}")
+    print(f"Training explainable PPO agent with consistency weight: {args.weight}")
     print(f"Timesteps: {TIMESTEPS}\n")
 
     model = PPO("MlpPolicy", env, verbose=1, n_steps=1024, batch_size=64, n_epochs=5)
     model.learn(total_timesteps=TIMESTEPS)
-    model.save(SAVE_PATH)
+    model.save(save_path)
 
-    print(f"\nExplainable model saved to {SAVE_PATH}.zip")
+    print(f"\nModel saved to {save_path}.zip")
