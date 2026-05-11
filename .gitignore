@@ -8,3 +8,4 @@ data/processed/
 *.parquet
 *.zip
 .DS_Store
+ride-share-marl/data/

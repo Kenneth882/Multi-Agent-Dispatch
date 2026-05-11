@@ -1,11 +1,11 @@
 {
-  "consistency_score": 0.9876,
+  "consistency_score": 0.9705,
   "total_explanations_logged": 4000,
-  "total_unique_states": 141,
+  "total_unique_states": 256,
   "reason_distribution": {
-    "available": 187,
-    "closest": 3790,
-    "idle_reduction": 23
+    "available": 1233,
+    "closest": 2766,
+    "idle_reduction": 1
   },
-  "inconsistent_state_count": 22
+  "inconsistent_state_count": 42
 }
