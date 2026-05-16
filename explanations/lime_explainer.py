@@ -165,7 +165,7 @@ def run_lime_eval():
 
         print(f"Episode {ep+1:>2} | Pickups: {total_pickups:>4} | Avg Wait: {avg_wait:.1f} | Response Rate: {response_rate:.2%} | LIME Consistency: {lime_consistency:.2%}")
 
-    print("\n--- LIME Eval Results (avg over 10 episodes) ---")
+    print("\n--- LIME Eval Results (avg over 3 episodes) ---")
     print(f"Average Pickups:        {np.mean([r['pickups'] for r in results]):.1f}")
     print(f"Avg Wait Time:          {np.mean([r['avg_wait'] for r in results]):.2f} steps")
     print(f"Order Response Rate:    {np.mean([r['response_rate'] for r in results]):.2%}")
