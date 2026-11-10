@@ -1,3 +1,9 @@
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from config.paths import PARQUET_RAW, SHAPEFILE, MANHATTAN_TRIPS, PROCESSED_DIR
+
 import pandas as pd
 import geopandas as gpd
 
@@ -23,13 +29,11 @@ def load_and_filter(parquet_path, shapefile_path):
         "fare_amount"
     ]].dropna()
 
-    df.to_parquet("data/processed/manhattan_trips.parquet", index=False)
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(str(MANHATTAN_TRIPS), index=False)
     print(f"Saved {len(df)} Manhattan trips")
     print(df.head(3))
     return df
 
 if __name__ == "__main__":
-    load_and_filter(
-        "data/raw/yellow_tripdata_2023-01.parquet",
-        "data/raw/taxi_zones/taxi_zones.shp"
-    )
+    load_and_filter(str(PARQUET_RAW), str(SHAPEFILE))

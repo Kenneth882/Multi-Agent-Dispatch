@@ -1,10 +1,15 @@
-import numpy as np
 import sys
-import os
+from pathlib import Path
+
+# Add project root to path so config and pipeline are importable
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import numpy as np
 from gymnasium import spaces
 from pettingzoo import ParallelEnv
+from config.paths import ROOT
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", "ride-share-marl", "pipeline"))
+sys.path.insert(0, str(ROOT / "ride-share-marl" / "pipeline"))
 from demand_generator import get_spawn_weights
 
 GRID_SIZE = 10

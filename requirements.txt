@@ -7,3 +7,5 @@ gymnasium
 matplotlib
 stable-baselines3
 torch
+scipy
+pytest

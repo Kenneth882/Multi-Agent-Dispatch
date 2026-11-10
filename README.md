@@ -111,3 +111,33 @@ Both members collaborate on testing, debugging, and writing the final report.
 
 - Sha et al. (2026). DualG-MARL. *Scientific Reports*. https://www.nature.com/articles/s41598-026-35004-8
 - Wang et al. (2025). CoopRide. *ACM KDD*. https://dl.acm.org/doi/10.1145/3690624.3709205 — [GitHub](https://github.com/tsinghua-fib-lab/CoopRide)
+
+---
+
+## Senior Project 2
+
+**New goal:** Compare four ride-sharing matching algorithms on the same 10×10 Manhattan simulation.
+
+| Algorithm | Description |
+|---|---|
+| Greedy | Each driver picks the nearest unassigned passenger |
+| Centralized Batch | Global optimal assignment solved each step (Hungarian algorithm) |
+| Sparse Matching | Batch matching with distance cutoff to reduce computation |
+| Regional Agent Bidding | Decentralized — drivers bid on passengers within their region |
+
+**New structure**
+```
+matching/          # SP2 algorithm implementations (one file per algorithm)
+  base.py          # Abstract BaseMatcher interface
+tests/             # Automated tests
+  test_smoke.py    # Import and structure smoke test
+config/
+  paths.py         # All project-root-relative paths (pathlib)
+```
+
+**Run smoke tests**
+```bash
+pytest tests/test_smoke.py -v
+```
+
+All Senior Project 1 files (`env/`, `models/`, `experiments/`, `explanations/`, `results/`) are preserved unchanged.

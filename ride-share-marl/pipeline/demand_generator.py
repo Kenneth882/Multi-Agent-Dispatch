@@ -1,10 +1,15 @@
+import os
 import pandas as pd
 import numpy as np
-import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from config.paths import MANHATTAN_TRIPS, SPAWN_WEIGHTS
 
 GRID_SIZE = 10
-DATA_PATH = "ride-share-marl/data/processed/manhattan_trips.parquet"
-CACHE_PATH = "ride-share-marl/data/processed/spawn_weights.npy"
+DATA_PATH = str(MANHATTAN_TRIPS)
+CACHE_PATH = str(SPAWN_WEIGHTS)
 
 def zone_to_grid(zone_id, zone_grid_map):
     return zone_grid_map.get(int(zone_id), (0, 0))
