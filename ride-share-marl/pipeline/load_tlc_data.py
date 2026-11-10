@@ -7,8 +7,16 @@ from config.paths import PARQUET_RAW, SHAPEFILE, MANHATTAN_TRIPS, PROCESSED_DIR
 import pandas as pd
 import geopandas as gpd
 
+
 def load_and_filter(parquet_path, shapefile_path):
-    
+    """
+    SP1 compatibility wrapper — behavior unchanged.
+    Loads yellow taxi parquet, filters to Manhattan-only trips,
+    saves to data/processed/manhattan_trips.parquet, and returns the DataFrame.
+
+    For the SP2 unified pipeline (yellow + HVFHV, standardized schema) use:
+        from ride-share-marl.pipeline.tlc_pipeline import run_pipeline
+    """
     zones = gpd.read_file(shapefile_path)
     manhattan_zones = zones[zones["borough"] == "Manhattan"]["LocationID"].tolist()
 
