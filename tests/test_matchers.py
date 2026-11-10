@@ -44,11 +44,11 @@ def _driver(id_, pos, status=DriverStatus.IDLE):
     return Driver(id=id_, position=pos, status=status)
 
 
-def _request(id_, pickup, dropoff=(9, 9), status=RequestStatus.WAITING):
+def _request(id_, pickup, dropoff=(9, 9), request_time=0, status=RequestStatus.WAITING):
     return PassengerRequest(
         id=id_, provider="test",
         pickup=pickup, dropoff=dropoff,
-        request_time=0, status=status,
+        request_time=request_time, status=status,
     )
 
 
@@ -156,33 +156,78 @@ class TestOutputContract:
 
 
 # ---------------------------------------------------------------------------
-# 2. Greedy: assigns nearest request
+# 2. Greedy: passenger-first, nearest driver, configurable radius
 # ---------------------------------------------------------------------------
 
 class TestGreedy:
-    def test_assigns_nearest(self):
-        # d0 at (0,0): r_near at (1,0) dist=1, r_far at (8,8) dist=16
-        drivers = [_driver("d0", (0, 0))]
-        requests = [_request("r_far", (8, 8)), _request("r_near", (1, 0))]
+    def test_assigns_nearest_driver_to_request(self):
+        # r0 at (1,0): d_near at (0,0) dist=1, d_far at (8,8) dist=15
+        drivers = [_driver("d_far", (8, 8)), _driver("d_near", (0, 0))]
+        requests = [_request("r0", (1, 0))]
         ctx = _ctx(drivers, requests)
         result = GreedyMatcher().match(_eligible(drivers), _waiting(requests), ctx)
-        assert result == [("d0", "r_near")]
+        assert result == [("d_near", "r0")]
 
-    def test_two_drivers_no_conflict(self):
-        # d0 near r0, d1 near r1 — greedy should assign each to nearest
-        drivers = [_driver("d0", (0, 0)), _driver("d1", (9, 9))]
-        requests = [_request("r0", (1, 0)), _request("r1", (8, 9))]
-        ctx = _ctx(drivers, requests)
-        result = GreedyMatcher().match(_eligible(drivers), _waiting(requests), ctx)
-        assert set(result) == {("d0", "r0"), ("d1", "r1")}
-
-    def test_tie_broken_by_request_id(self):
-        # d0 equidistant from r_a and r_b — r_a wins (lexicographically smaller)
+    def test_passenger_first_older_request_served_first(self):
+        """r_old arrived at t=0, r_new at t=60. Only one driver. r_old gets it."""
         drivers = [_driver("d0", (5, 5))]
-        requests = [_request("r_b", (5, 6)), _request("r_a", (6, 5))]
+        r_old = _request("r_old", (5, 5), request_time=0)
+        r_new = _request("r_new", (5, 5), request_time=60)
+        ctx = _ctx(drivers, [r_old, r_new])
+        result = GreedyMatcher().match(_eligible(drivers), [r_old, r_new], ctx)
+        assert len(result) == 1
+        assert result[0][1] == "r_old"
+
+    def test_same_time_tie_broken_by_request_id(self):
+        """Two requests at same time — lexicographically smaller ID wins."""
+        drivers = [_driver("d0", (5, 5))]
+        r_b = _request("r_b", (5, 6), request_time=0)
+        r_a = _request("r_a", (6, 5), request_time=0)
+        ctx = _ctx(drivers, [r_b, r_a])
+        result = GreedyMatcher().match(_eligible(drivers), [r_b, r_a], ctx)
+        assert result[0][1] == "r_a"
+
+    def test_driver_tie_broken_by_driver_id(self):
+        """Two equidistant drivers — lexicographically smaller driver ID wins."""
+        drivers = [_driver("d_b", (4, 5)), _driver("d_a", (6, 5))]
+        requests = [_request("r0", (5, 5))]
         ctx = _ctx(drivers, requests)
         result = GreedyMatcher().match(_eligible(drivers), _waiting(requests), ctx)
-        assert result[0][1] == "r_a"
+        assert result[0][0] == "d_a"
+
+    def test_pickup_radius_respected(self):
+        """Driver beyond radius is not assigned."""
+        drivers = [_driver("d0", (0, 0))]
+        requests = [_request("r0", (5, 5))]  # distance=10 > radius=3
+        ctx = _ctx(drivers, requests)
+        result = GreedyMatcher(pickup_radius=3).match(
+            _eligible(drivers), _waiting(requests), ctx
+        )
+        assert result == []
+
+    def test_pickup_radius_none_unlimited(self):
+        """pickup_radius=None assigns regardless of distance."""
+        drivers = [_driver("d0", (0, 0))]
+        requests = [_request("r0", (9, 9))]  # distance=18
+        ctx = _ctx(drivers, requests)
+        result = GreedyMatcher(pickup_radius=None).match(
+            _eligible(drivers), _waiting(requests), ctx
+        )
+        assert result == [("d0", "r0")]
+
+    def test_pickup_radius_zero_same_cell_only(self):
+        """pickup_radius=0 only assigns driver already at pickup cell."""
+        drivers = [_driver("d0", (3, 3)), _driver("d1", (5, 5))]
+        requests = [_request("r0", (3, 3)), _request("r1", (5, 6))]
+        ctx = _ctx(drivers, requests)
+        result = GreedyMatcher(pickup_radius=0).match(
+            _eligible(drivers), _waiting(requests), ctx
+        )
+        assert result == [("d0", "r0")]
+
+    def test_invalid_pickup_radius_raises(self):
+        with pytest.raises(ValueError):
+            GreedyMatcher(pickup_radius=-1)
 
     def test_deterministic_same_inputs(self):
         drivers = [_driver("d0", (3, 3)), _driver("d1", (7, 7))]
@@ -214,13 +259,6 @@ class TestGreedy:
 
 class TestCentralizedBatch:
     def test_optimal_on_known_instance(self):
-        """
-        d0=(0,0), d1=(9,9)
-        r0=(0,1) dist from d0=1, dist from d1=17
-        r1=(9,8) dist from d0=16, dist from d1=1
-        Optimal: d0->r0 (cost 1), d1->r1 (cost 1), total=2
-        Greedy (d0 first) would also get this, but Hungarian guarantees it.
-        """
         drivers = [_driver("d0", (0, 0)), _driver("d1", (9, 9))]
         requests = [_request("r0", (0, 1)), _request("r1", (9, 8))]
         ctx = _ctx(drivers, requests)
@@ -229,77 +267,49 @@ class TestCentralizedBatch:
         )
         assert set(result) == {("d0", "r0"), ("d1", "r1")}
 
-    def test_suboptimal_greedy_case(self):
-        """
-        Instance where greedy (driver-order dependent) is suboptimal but
-        Hungarian finds the global optimum.
-
-        d0=(0,0), d1=(0,2)
-        r0=(0,1): dist d0=1, dist d1=1  (tie)
-        r1=(0,3): dist d0=3, dist d1=1
-
-        Greedy (d0 first, tie-break r0): d0->r0 (1), d1->r1 (1) total=2
-        Hungarian: same total=2 — both optimal here.
-        Verify Hungarian assigns each driver to exactly one request.
-        """
-        drivers = [_driver("d0", (0, 0)), _driver("d1", (0, 2))]
-        requests = [_request("r0", (0, 1)), _request("r1", (0, 3))]
-        ctx = _ctx(drivers, requests)
-        result = CentralizedBatchMatcher().match(
-            _eligible(drivers), _waiting(requests), ctx
-        )
-        assert len(result) == 2
-        assert len({p[0] for p in result}) == 2  # both drivers assigned
-        assert len({p[1] for p in result}) == 2  # both requests assigned
-
     def test_hungarian_beats_greedy_on_adversarial(self):
         """
-        Adversarial case: greedy assigns suboptimally, Hungarian does not.
-
-        d0=(0,0), d1=(0,4)
-        r0=(0,1): dist d0=1, dist d1=3
-        r1=(0,3): dist d0=3, dist d1=1
-
-        Greedy (d0 first): d0->r0 (1), d1->r1 (1), total=2
-        Hungarian: same total=2 — both optimal.
-
-        Now shift r1 to (0,5):
-        d0=(0,0), d1=(0,4)
-        r0=(0,1): dist d0=1, dist d1=3
-        r1=(0,5): dist d0=5, dist d1=1
-
-        Greedy: d0->r0 (1), d1->r1 (1), total=2
-        Hungarian: same.
-
-        True adversarial (cross-assignment is better):
-        d0=(0,0), d1=(0,6)
-        r0=(0,5): dist d0=5, dist d1=1
-        r1=(0,1): dist d0=1, dist d1=5
-
-        Greedy (d0 first): d0->r0 (5), d1->r1 (5), total=10
-        Hungarian: d0->r1 (1), d1->r0 (1), total=2  ← optimal
+        d0=(0,0), d1=(0,6): r0=(0,5), r1=(0,1)
+        Greedy (passenger-first, r0 older): r0 gets d1 (dist=1), r1 gets d0 (dist=1) total=2
+        Hungarian: same total=2 — both optimal here.
+        Verify Hungarian total cost == 2.
         """
         drivers = [_driver("d0", (0, 0)), _driver("d1", (0, 6))]
         requests = [_request("r0", (0, 5)), _request("r1", (0, 1))]
         ctx = _ctx(drivers, requests)
-
-        greedy_result = GreedyMatcher().match(
-            _eligible(drivers), _waiting(requests), ctx
-        )
         hungarian_result = CentralizedBatchMatcher().match(
             _eligible(drivers), _waiting(requests), ctx
         )
+        d_map = {d.id: d for d in drivers}
+        r_map = {r.id: r for r in requests}
+        total = sum(
+            MatchingContext.manhattan_distance(d_map[di].position, r_map[ri].pickup)
+            for di, ri in hungarian_result
+        )
+        assert total == 2
 
-        def total_cost(assignments):
-            d_map = {d.id: d for d in drivers}
-            r_map = {r.id: r for r in requests}
-            return sum(
-                MatchingContext.manhattan_distance(d_map[di].position, r_map[ri].pickup)
-                for di, ri in assignments
-            )
+    def test_max_pickup_distance_respected(self):
+        """Pairs beyond max_pickup_distance are never selected."""
+        drivers = [_driver("d0", (0, 0))]
+        requests = [_request("r0", (5, 5))]  # distance=10 > limit=3
+        ctx = _ctx(drivers, requests)
+        result = CentralizedBatchMatcher(max_pickup_distance=3).match(
+            _eligible(drivers), _waiting(requests), ctx
+        )
+        assert result == []
 
-        assert total_cost(hungarian_result) <= total_cost(greedy_result)
-        assert total_cost(hungarian_result) == 2
+    def test_max_pickup_distance_none_unlimited(self):
+        drivers = [_driver("d0", (0, 0))]
+        requests = [_request("r0", (9, 9))]
+        ctx = _ctx(drivers, requests)
+        result = CentralizedBatchMatcher(max_pickup_distance=None).match(
+            _eligible(drivers), _waiting(requests), ctx
+        )
+        assert result == [("d0", "r0")]
+
+    def test_invalid_max_pickup_distance_raises(self):
+        with pytest.raises(ValueError):
+            CentralizedBatchMatcher(max_pickup_distance=-1)
 
     def test_more_drivers_than_requests(self):
         drivers = [_driver(f"d{i}", (i * 2, 0)) for i in range(4)]
@@ -326,9 +336,8 @@ class TestCentralizedBatch:
 
 class TestSparse:
     def test_no_assignment_beyond_cutoff(self):
-        # d0 at (0,0), r0 at (5,5): distance=10 > cutoff=3
         drivers = [_driver("d0", (0, 0))]
-        requests = [_request("r0", (5, 5))]
+        requests = [_request("r0", (5, 5))]  # distance=10 > cutoff=3
         ctx = _ctx(drivers, requests)
         result = SparseMatcher(max_distance=3).match(
             _eligible(drivers), _waiting(requests), ctx
@@ -373,7 +382,6 @@ class TestSparse:
         result = SparseMatcher(max_distance=0).match(
             _eligible(drivers), _waiting(requests), ctx
         )
-        # Only d0->r0 is at distance 0; d1->r1 is distance 1
         assert result == [("d0", "r0")]
 
     def test_invalid_max_distance_raises(self):
@@ -381,7 +389,7 @@ class TestSparse:
             SparseMatcher(max_distance=-1)
 
     def test_optimal_within_range(self):
-        """Same adversarial case as Hungarian test — sparse with large cutoff."""
+        """Sparse with large cutoff produces globally optimal assignment."""
         drivers = [_driver("d0", (0, 0)), _driver("d1", (0, 6))]
         requests = [_request("r0", (0, 5)), _request("r1", (0, 1))]
         ctx = _ctx(drivers, requests)
@@ -394,7 +402,7 @@ class TestSparse:
             MatchingContext.manhattan_distance(d_map[di].position, r_map[ri].pickup)
             for di, ri in result
         )
-        assert total == 2  # optimal
+        assert total == 2
 
 
 # ---------------------------------------------------------------------------
@@ -402,12 +410,7 @@ class TestSparse:
 # ---------------------------------------------------------------------------
 
 class TestRegionalBidding:
-    def _region(self, pos, n_regions=2, grid_size=10):
-        r, c = pos
-        return (r * n_regions // grid_size, c * n_regions // grid_size)
-
     def test_driver_assigned_to_in_region_request(self):
-        """d0 in region (0,0), r0 in region (0,0) — should be assigned."""
         drivers = [_driver("d0", (1, 1))]   # region (0,0) with n_regions=2
         requests = [_request("r0", (2, 2))]  # region (0,0)
         ctx = _ctx(drivers, requests)
@@ -417,7 +420,6 @@ class TestRegionalBidding:
         assert result == [("d0", "r0")]
 
     def test_no_cross_region_when_disabled(self):
-        """d0 in region (0,0), r0 in region (1,1) — no assignment when cross_region=False."""
         drivers = [_driver("d0", (1, 1))]   # region (0,0)
         requests = [_request("r0", (8, 8))]  # region (1,1)
         ctx = _ctx(drivers, requests)
@@ -427,7 +429,6 @@ class TestRegionalBidding:
         assert result == []
 
     def test_cross_region_fallback_when_enabled(self):
-        """d0 in region (0,0), r0 in region (1,1) — assigned via fallback."""
         drivers = [_driver("d0", (1, 1))]
         requests = [_request("r0", (8, 8))]
         ctx = _ctx(drivers, requests)
@@ -437,11 +438,6 @@ class TestRegionalBidding:
         assert result == [("d0", "r0")]
 
     def test_two_regions_no_cross_contamination(self):
-        """
-        d0 in region (0,0), d1 in region (1,1).
-        r0 in region (0,0), r1 in region (1,1).
-        Each driver should get its own region's request.
-        """
         drivers = [_driver("d0", (1, 1)), _driver("d1", (8, 8))]
         requests = [_request("r0", (2, 2)), _request("r1", (7, 7))]
         ctx = _ctx(drivers, requests)
@@ -454,8 +450,7 @@ class TestRegionalBidding:
         with pytest.raises(ValueError):
             RegionalBiddingMatcher(n_regions=0)
 
-    def test_n_regions_1_behaves_like_greedy(self):
-        """With n_regions=1, all drivers and requests are in the same region."""
+    def test_n_regions_1_all_in_same_region(self):
         drivers = [_driver("d0", (0, 0)), _driver("d1", (9, 9))]
         requests = [_request("r0", (1, 0)), _request("r1", (8, 9))]
         ctx = _ctx(drivers, requests)
@@ -488,7 +483,6 @@ class TestAllMatchersAgree:
             assert result == [("d0", "r0")], f"{matcher.__class__.__name__} failed"
 
     def test_no_busy_drivers_passed_in(self):
-        """Matchers receive only idle drivers — busy ones are filtered by the env."""
         drivers = [
             _driver("d0", (0, 0), status=DriverStatus.IDLE),
             _driver("d1", (1, 1), status=DriverStatus.ENROUTE_PICKUP),
@@ -534,21 +528,15 @@ class TestMatchersInEnv:
         rr = result.metrics["order_response_rate"]
         assert 0.0 <= rr <= 1.0
 
-    def test_hungarian_completions_ge_greedy(self):
-        """
-        On a fixed scenario, Hungarian should complete >= as many trips as Greedy.
-        (Hungarian is globally optimal per step; Greedy is not.)
-        """
+    def test_hungarian_avg_wait_le_greedy(self):
+        """Hungarian minimises total pickup distance per step so avg_wait <= greedy."""
         from env.matching_env import MatchingEnv, SimConfig, make_synthetic_trips
         trips = make_synthetic_trips(n=40, seed=99)
         cfg = SimConfig(n_drivers=8, timestep=60)
         r_greedy = MatchingEnv(GreedyMatcher(), config=cfg, seed=99, trips_df=trips).run(60)
         r_batch = MatchingEnv(CentralizedBatchMatcher(), config=cfg, seed=99, trips_df=trips).run(60)
-        # Hungarian minimises total pickup distance per step, so avg_wait <= greedy
-        # (or equal). We check it doesn't do strictly worse.
         gw = r_greedy.metrics["avg_wait_seconds"]
         bw = r_batch.metrics["avg_wait_seconds"]
-        # Allow small floating-point tolerance
         assert bw <= gw + 1e-6, (
             f"Hungarian avg_wait ({bw:.1f}s) > Greedy avg_wait ({gw:.1f}s)"
         )

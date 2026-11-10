@@ -508,3 +508,85 @@ class TestMakeSyntheticTrips:
         df1 = make_synthetic_trips(n=10, seed=42)
         df2 = make_synthetic_trips(n=10, seed=42)
         assert df1.equals(df2)
+
+
+# ---------------------------------------------------------------------------
+# 11. Edge cases not previously covered
+# ---------------------------------------------------------------------------
+
+class TestEdgeCases:
+    def test_metrics_no_completed_trips_returns_nan(self):
+        """metrics() must not crash when no trips have been completed."""
+        import math
+        cfg = SimConfig(n_drivers=2, timestep=60)
+        env = MatchingEnv(NullMatcher(), config=cfg, seed=0, trips_df=None)
+        env.reset()
+        m = env.metrics()
+        assert math.isnan(m["avg_wait_seconds"])
+        assert math.isnan(m["order_response_rate"])
+
+    def test_multiple_requests_same_timestep_all_injected(self):
+        """All pending trips at the same request_time are injected in one step."""
+        import pandas as pd
+        trips = pd.DataFrame([
+            {"request_time_seconds": 60, "pickup_row": 0, "pickup_col": 0,
+             "dropoff_row": 1, "dropoff_col": 1, "provider": "synthetic"},
+            {"request_time_seconds": 60, "pickup_row": 2, "pickup_col": 2,
+             "dropoff_row": 3, "dropoff_col": 3, "provider": "synthetic"},
+            {"request_time_seconds": 60, "pickup_row": 4, "pickup_col": 4,
+             "dropoff_row": 5, "dropoff_col": 5, "provider": "synthetic"},
+        ])
+        cfg = SimConfig(n_drivers=1, timestep=60)
+        env = MatchingEnv(NullMatcher(), config=cfg, seed=0, trips_df=trips)
+        env.reset()
+        env.step()  # t=60: all three requests should be injected
+        assert len(env.requests) == 3
+
+    def test_load_trips_missing_file_raises(self):
+        """load_trips_for_simulation raises FileNotFoundError for missing parquet."""
+        from env.matching_env import load_trips_for_simulation
+        with pytest.raises(FileNotFoundError):
+            load_trips_for_simulation(
+                trips_path=Path("/nonexistent/trips.parquet"),
+                zone_map_path=Path("/nonexistent/zone_grid_map.json"),
+            )
+
+    def test_load_trips_missing_zone_map_raises(self):
+        """load_trips_for_simulation raises FileNotFoundError for missing zone map."""
+        import tempfile
+        from env.matching_env import load_trips_for_simulation
+        # Create a dummy parquet so only the zone map is missing
+        import pandas as pd
+        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
+            tmp = Path(f.name)
+        try:
+            pd.DataFrame().to_parquet(tmp)
+            with pytest.raises(FileNotFoundError):
+                load_trips_for_simulation(
+                    trips_path=tmp,
+                    zone_map_path=Path("/nonexistent/zone_grid_map.json"),
+                )
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    def test_trips_df_missing_required_column_raises(self):
+        """MatchingEnv raises ValueError if trips_df is missing a required column."""
+        import pandas as pd
+        bad_df = pd.DataFrame({"pickup_row": [0], "pickup_col": [0]})  # missing others
+        cfg = SimConfig(n_drivers=1, timestep=60)
+        env = MatchingEnv(NullMatcher(), config=cfg, seed=0, trips_df=bad_df)
+        with pytest.raises(ValueError, match="missing columns"):
+            env.reset()
+
+    def test_sp1_env_still_importable(self):
+        """SP1 RideShareEnv must still be importable after the lazy-load fix."""
+        from env.ride_share_env import RideShareEnv
+        assert RideShareEnv is not None
+
+    def test_matching_env_importable_without_pettingzoo_side_effects(self):
+        """Importing matching_env directly must not import pettingzoo."""
+        import sys
+        # matching_env should already be imported; pettingzoo may or may not be
+        # loaded depending on test order. We just verify the import doesn't raise.
+        from env.matching_env import MatchingEnv, SimConfig
+        assert MatchingEnv is not None

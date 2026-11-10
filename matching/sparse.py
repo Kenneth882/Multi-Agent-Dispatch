@@ -14,7 +14,15 @@ This reduces computation in large, sparse scenarios where most drivers are
 far from most requests, and models realistic dispatch constraints (e.g. a
 driver in Inwood should not be dispatched to Battery Park).
 
-Time complexity: O(E³) where E = number of eligible pairs ≤ min(D, R).
+Known limitations
+-----------------
+- The cost matrix is still built for all D×R pairs before filtering. For a
+  10×10 grid with ≤20 drivers this is negligible, but a true sparse
+  implementation would only build the submatrix of eligible pairs.
+- The cutoff is a hard Euclidean (Manhattan) threshold, not a travel-time
+  threshold. In a real network, travel time depends on road topology.
+
+Time complexity: O(D×R) to build cost matrix + O(min(D,R)³) for Hungarian.
 """
 import numpy as np
 from scipy.optimize import linear_sum_assignment

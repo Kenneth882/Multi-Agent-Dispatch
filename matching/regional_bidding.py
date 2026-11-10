@@ -20,6 +20,18 @@ pickup cell. Both are mapped to a region by:
     region_row = position_row * n_regions // grid_size
     region_col = position_col * n_regions // grid_size
 
+Known limitations vs. true auction-based bidding
+-------------------------------------------------
+- This is greedy-within-region, not iterative auction bidding. A true
+  auction would have drivers submit scalar bids (e.g. inverse distance),
+  a central auctioneer resolve conflicts across regions in multiple rounds,
+  and drivers update bids based on competition. That is not implemented here.
+- The cross_region=True fallback makes the algorithm behave identically to
+  passenger-first greedy when all regions are empty except one. The
+  decentralized property only holds when cross_region=False.
+- Region boundaries are static (fixed at construction). Dynamic region
+  resizing based on demand density is not supported.
+
 Time complexity: O(D × R) per step (same as greedy, but filtered by region).
 """
 from collections import defaultdict
