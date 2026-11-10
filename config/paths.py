@@ -14,6 +14,8 @@ PROCESSED_DIR = ROOT / "data" / "processed"
 MANHATTAN_TRIPS = PROCESSED_DIR / "manhattan_trips.parquet"       # SP1 yellow-only output
 COMBINED_TRIPS = PROCESSED_DIR / "combined_trips.parquet"         # SP2 yellow + HVFHV output
 SPAWN_WEIGHTS = PROCESSED_DIR / "spawn_weights.npy"
+ZONE_GRID_MAP = PROCESSED_DIR / "zone_grid_map.json"   # LocationID -> (row, col)
+GRID_VIZ = PROCESSED_DIR / "zone_grid_visualization.png"
 
 # Results
 RESULTS_DIR = ROOT / "results"
