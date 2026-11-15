@@ -9,3 +9,5 @@ data/processed/
 *.zip
 .DS_Store
 ride-share-marl/data/
+data/raw/*.parquet
+data/processed/

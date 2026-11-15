@@ -133,6 +133,7 @@ tests/             # Automated tests
   test_smoke.py    # Import and structure smoke test
 config/
   paths.py         # All project-root-relative paths (pathlib)
+data/              # Input datasets (raw/ untouched, processed/ derived)
 ```
 
 **Run smoke tests**
