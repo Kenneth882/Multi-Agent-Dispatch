@@ -166,6 +166,8 @@ python scripts/prepare_scenarios.py
 
 The report is written to `results/dataset_validation_2023-01-18.csv`. The script scans the monthly file in batches and retains only qualifying January 18 records for exact deduplication. It uses New York local request time to count hourly demand and select the half-open midday `[11:00, 14:00)` and peak `[17:00, 20:00)` windows. Required fields are the provider license, request/pickup/drop-off timestamps, and both zone IDs. Trip duration is computed from pickup and drop-off timestamps using the existing TLC pipeline limits.
 
+The earlier scenario workflow is available through `python scripts/prepare_scenarios_legacy.py`. It applies additional island-zone, mileage, fare, and duration filters and writes date-prefixed outputs. The SP2 metrics in Progress Update #3 use the primary workflow described above.
+
 Pass `--max-requests N --seed 42` to cap each window with reproducible sampling without replacement. Without a cap, the report counts every valid request in each window. A missing input produces a partial report and exit code 1.
 
 ### Run a prepared Uber/Lyft scenario
