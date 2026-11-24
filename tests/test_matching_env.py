@@ -11,6 +11,7 @@ Run from project root:
 import sys
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -590,3 +591,50 @@ class TestEdgeCases:
         # loaded depending on test order. We just verify the import doesn't raise.
         from env.matching_env import MatchingEnv, SimConfig
         assert MatchingEnv is not None
+
+
+def test_unified_trip_loader_filters_before_limiting(tmp_path):
+    from env.matching_env import load_trips_for_simulation
+
+    start = pd.Timestamp("2023-01-09 09:00:00")
+    trips_path = tmp_path / "combined_trips.parquet"
+    zone_map = tmp_path / "zone_grid_map.json"
+    zone_map.write_text('{"1": [0, 0], "2": [0, 1]}', encoding="utf-8")
+    pd.DataFrame({
+        "provider": ["yellow", "uber", "lyft"],
+        "request_datetime": [pd.NaT, start + pd.Timedelta(seconds=5), start],
+        "pickup_datetime": [start + pd.Timedelta(seconds=30)] * 3,
+        "PULocationID": [1, 1, 99],
+        "DOLocationID": [2, 2, 2],
+    }).to_parquet(trips_path, index=False)
+
+    loaded = load_trips_for_simulation(trips_path, zone_map, start, max_requests=2)
+    assert loaded["provider"].tolist() == ["uber", "yellow"]
+    assert loaded["request_time_seconds"].tolist() == [5, 30]
+    empty = load_trips_for_simulation(trips_path, zone_map, start, sim_duration_seconds=1)
+    assert empty.empty
+    assert empty.columns.tolist() == loaded.columns.tolist()
+
+
+def test_scheduled_arrival_drives_timeout():
+    trips = pd.DataFrame([{
+        "request_time_seconds": 5, "pickup_row": 0, "pickup_col": 0,
+        "dropoff_row": 1, "dropoff_col": 1,
+    }])
+    env = MatchingEnv(NullMatcher(), SimConfig(request_timeout=30), trips_df=trips)
+    env.reset()
+    assert env.step().expirations == 1
+    request = next(iter(env.requests.values()))
+    assert request.request_time == 5
+    assert request.timeout == 35
+
+
+def test_utilization_includes_time_on_unfinished_trip():
+    env = MatchingEnv(GreedyNearestMatcher(), SimConfig(n_drivers=1))
+    env.reset()
+    env.drivers["d0"].position = (0, 0)
+    request = env._create_request((0, 0), (0, 3))
+    env.step()
+    env.step()
+    assert request.status == RequestStatus.PICKED_UP
+    assert env.metrics()["vehicle_utilization"] == 0.5

@@ -1,114 +1,169 @@
-"""
-matching/regional_bidding.py
------------------------------
-Regional Agent Bidding matching algorithm (SP2).
+"""Sequential price auctions within regions, with an optional cross-region broker."""
 
-The grid is divided into an n_regions × n_regions partition. Each driver
-bids only on requests within its own region. Within each region, the
-nearest-driver-to-request assignment is used (greedy within region).
-
-Cross-region fallback (cross_region=True, default):
-  If a driver's home region has no waiting requests, it is allowed to bid
-  on requests in any region. This prevents idle drivers from sitting out
-  when nearby regions have unmet demand.
-
-When cross_region=False, drivers strictly bid only within their home region.
-This models a fully decentralized dispatch with hard regional boundaries.
-
-Region assignment uses the driver's current position and the request's
-pickup cell. Both are mapped to a region by:
-    region_row = position_row * n_regions // grid_size
-    region_col = position_col * n_regions // grid_size
-
-Known limitations vs. true auction-based bidding
--------------------------------------------------
-- This is greedy-within-region, not iterative auction bidding. A true
-  auction would have drivers submit scalar bids (e.g. inverse distance),
-  a central auctioneer resolve conflicts across regions in multiple rounds,
-  and drivers update bids based on competition. That is not implemented here.
-- The cross_region=True fallback makes the algorithm behave identically to
-  passenger-first greedy when all regions are empty except one. The
-  decentralized property only holds when cross_region=False.
-- Region boundaries are static (fixed at construction). Dynamic region
-  resizing based on demand density is not supported.
-
-Time complexity: O(D × R) per step (same as greedy, but filtered by region).
-"""
-from collections import defaultdict
+from collections import Counter, defaultdict, deque
+from math import isfinite
 
 from matching.base import BaseMatcher
 
 
 class RegionalBiddingMatcher(BaseMatcher):
-    """
-    Decentralized matching: drivers bid on requests within their region.
+    """Dispatch with local auctions or the original driver-first greedy prototype.
 
-    Args:
-        n_regions:    Number of region divisions per axis. Default 2 gives a
-                      2×2 = 4-region partition of the 10×10 grid.
-        cross_region: If True (default), drivers with no in-region requests
-                      fall back to bidding globally. If False, they sit idle.
+    Drivers bid on pickups in their own region. If cross_region is enabled,
+    a broker auctions leftover cross-region pairs after local awards are fixed.
+    The default partition has two divisions per axis. Prices are step-local.
+    max_iterations limits bidder turns in each regional or broker auction.
     """
 
-    def __init__(self, n_regions: int = 2, cross_region: bool = True):
+    def __init__(
+        self, n_regions: int = 2, cross_region: bool = True, max_pickup_distance=None,
+        *, mode: str = "auction", epsilon: float = 0.5, max_iterations: int = 10_000,
+    ):
         if n_regions < 1:
             raise ValueError(f"n_regions must be >= 1, got {n_regions}")
+        if max_pickup_distance is not None and max_pickup_distance < 0:
+            raise ValueError("max_pickup_distance must be nonnegative")
+        if mode not in {"auction", "greedy"}:
+            raise ValueError("mode must be 'auction' or 'greedy'")
+        if not isfinite(epsilon) or epsilon <= 0:
+            raise ValueError("epsilon must be finite and positive")
+        if not isinstance(max_iterations, int) or max_iterations < 1:
+            raise ValueError("max_iterations must be a positive integer")
         self.n_regions = n_regions
         self.cross_region = cross_region
-
-    # ------------------------------------------------------------------
-    # Public interface
-    # ------------------------------------------------------------------
+        self.max_pickup_distance = max_pickup_distance
+        self.mode = mode
+        self.epsilon = epsilon
+        self.max_iterations = max_iterations
 
     def match(self, eligible_drivers, waiting_requests, context):
+        stats = Counter({
+            "regional_bids": 0,
+            "regional_auction_rounds": 0,
+            "regional_displacements": 0,
+            "regional_iteration_limit_hits": 0,
+            "regional_cross_assignments": 0,
+            "regional_communication_events": 0,
+        })
         if not eligible_drivers or not waiting_requests:
+            context.matcher_metrics.update(stats)
+            return []
+        drivers = sorted(eligible_drivers, key=lambda driver: driver.id)
+        requests = sorted(waiting_requests, key=lambda request: request.id)
+        grid_size = context.config.grid_size
+        driver_regions = {d.id: self._region(d.position, grid_size) for d in drivers}
+        request_regions = {r.id: self._region(r.pickup, grid_size) for r in requests}
+        requests_by_region = defaultdict(list)
+        for request in requests:
+            requests_by_region[request_regions[request.id]].append(request)
+
+        if self.mode == "greedy":
+            assignments = self._greedy(drivers, requests, driver_regions, request_regions, requests_by_region, context)
+        else:
+            drivers_by_region = defaultdict(list)
+            for driver in drivers:
+                drivers_by_region[driver_regions[driver.id]].append(driver)
+            assignments = []
+            for region, local_drivers in sorted(drivers_by_region.items()):
+                assignments.extend(self._auction(
+                    local_drivers, requests_by_region[region], context, stats,
+                ))
+
+            if self.cross_region:
+                assigned_drivers = {d for d, _ in assignments}
+                assigned_requests = {r for _, r in assignments}
+                remaining_drivers = [d for d in drivers if d.id not in assigned_drivers]
+                remaining_requests = [r for r in requests if r.id not in assigned_requests]
+                regions = {driver_regions[d.id] for d in remaining_drivers}
+                regions.update(request_regions[r.id] for r in remaining_requests)
+                if remaining_drivers and remaining_requests and len(regions) > 1:
+                    stats["regional_communication_events"] += len(regions)
+                    awards = self._auction(
+                        remaining_drivers, remaining_requests, context, stats,
+                        broker_regions=(driver_regions, request_regions),
+                    )
+                    stats["regional_communication_events"] += 2 * len(awards)
+                    assignments.extend(awards)
+
+        stats["regional_cross_assignments"] = sum(
+            driver_regions[d] != request_regions[r] for d, r in assignments
+        )
+        context.matcher_metrics.update(stats)
+        return sorted(assignments)
+
+    def _auction(self, drivers, requests, context, stats, broker_regions=None):
+        if not drivers or not requests:
             return []
 
-        grid_size = context.config.grid_size
+        options = {}
+        for driver in drivers:
+            choices = []
+            for request in requests:
+                if broker_regions is not None:
+                    driver_regions, request_regions = broker_regions
+                    if driver_regions[driver.id] == request_regions[request.id]:
+                        continue
+                distance = context.pickup_distance(driver, request)
+                if self.max_pickup_distance is None or distance <= self.max_pickup_distance:
+                    choices.append((request.id, distance))
+            if choices:
+                options[driver.id] = choices
 
-        # Group requests by region
-        requests_by_region: dict[tuple, list] = defaultdict(list)
-        for req in waiting_requests:
-            requests_by_region[self._region(req.pickup, grid_size)].append(req)
-
-        assignments = []
-        assigned_requests: set[str] = set()
-
-        # Sort drivers for determinism
-        for driver in sorted(eligible_drivers, key=lambda d: d.id):
-            home = self._region(driver.position, grid_size)
-            candidates = [
-                r for r in requests_by_region.get(home, [])
-                if r.id not in assigned_requests
-            ]
-
-            if not candidates and self.cross_region:
-                # Fall back: bid on all unassigned requests globally
-                candidates = [r for r in waiting_requests if r.id not in assigned_requests]
-
-            if not candidates:
+        if not options:
+            return []
+        k = min(len(options), len(requests))
+        max_distance = max(distance for choices in options.values() for _, distance in choices)
+        reward = 1 + k * (max_distance + self.epsilon)
+        prices = defaultdict(float)
+        owners = {}
+        queue = deque(options)
+        for _ in range(self.max_iterations):
+            if not queue:
+                break
+            driver = queue.popleft()
+            stats["regional_auction_rounds"] += 1
+            best_request, best, second = None, 0.0, 0.0  # idle is a free outside option
+            for request, distance in options[driver]:
+                surplus = reward - distance - prices[request]
+                if surplus > best:
+                    best_request, best, second = request, surplus, best
+                elif surplus > second:
+                    second = surplus
+            if best_request is None:
                 continue
+            prices[best_request] += best - second + self.epsilon
+            if best_request in owners:
+                queue.append(owners[best_request])
+                stats["regional_displacements"] += 1
+            owners[best_request] = driver
+            stats["regional_bids"] += 1
 
-            best = min(
-                candidates,
-                key=lambda r: (
-                    context.manhattan_distance(driver.position, r.pickup),
-                    r.id,
-                ),
-            )
-            assignments.append((driver.id, best.id))
-            assigned_requests.add(best.id)
+        if queue:
+            stats["regional_iteration_limit_hits"] += 1
+        return [(driver, request) for request, driver in owners.items()]
 
+    def _greedy(self, drivers, requests, driver_regions, request_regions, requests_by_region, context):
+        assignments = []
+        used = set()
+        for driver in drivers:
+            home = driver_regions[driver.id]
+            local = requests_by_region[home]
+            best = self._best_candidate(driver, (r for r in local if r.id not in used), context)
+            if best is None and self.cross_region:
+                candidates = (r for r in requests if r.id not in used and request_regions[r.id] != home)
+                best = self._best_candidate(driver, candidates, context)
+            if best is not None:
+                assignments.append((driver.id, best.id))
+                used.add(best.id)
         return assignments
 
-    # ------------------------------------------------------------------
-    # Internal
-    # ------------------------------------------------------------------
+    def _best_candidate(self, driver, candidates, context):
+        scored = ((context.pickup_distance(driver, r), r) for r in candidates)
+        distance, best = min(scored, key=lambda pair: (pair[0], pair[1].id), default=(0, None))
+        if self.max_pickup_distance is not None and distance > self.max_pickup_distance:
+            return None
+        return best
 
-    def _region(self, position: tuple[int, int], grid_size: int) -> tuple[int, int]:
-        """Map a grid cell to its (region_row, region_col)."""
-        r, c = position
-        return (
-            r * self.n_regions // grid_size,
-            c * self.n_regions // grid_size,
-        )
+    def _region(self, position, grid_size):
+        row, col = position
+        return row * self.n_regions // grid_size, col * self.n_regions // grid_size

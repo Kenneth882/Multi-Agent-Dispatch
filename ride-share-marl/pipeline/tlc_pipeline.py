@@ -50,7 +50,7 @@ import geopandas as gpd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from config.paths import (
     PARQUET_RAW, HVFHV_RAW, SHAPEFILE,
-    PROCESSED_DIR, COMBINED_TRIPS,
+    COMBINED_TRIPS,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -365,7 +365,7 @@ def run_pipeline(
 
     combined = pd.concat(frames, ignore_index=True)[OUTPUT_COLUMNS]
 
-    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     combined.to_parquet(str(output_path), index=False, engine="pyarrow")
 
     _print_summary(combined, all_stats, output_path)

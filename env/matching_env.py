@@ -33,10 +33,13 @@ from __future__ import annotations
 
 import sys
 import logging
-from copy import deepcopy
+import tracemalloc
+from collections import Counter, deque
 from dataclasses import dataclass, field
 from enum import Enum, auto
+from math import nan
 from pathlib import Path
+from time import perf_counter
 from typing import Optional
 
 import numpy as np
@@ -111,13 +114,13 @@ class PassengerRequest:
     provider: str
     pickup: tuple[int, int]
     dropoff: tuple[int, int]
-    request_time: int               # sim_time (seconds) when request arrived
+    request_time: float             # elapsed seconds when the request arrived
     status: RequestStatus = RequestStatus.WAITING
     assigned_driver_id: Optional[str] = None
     assignment_time: Optional[int] = None
     actual_simulated_pickup_time: Optional[int] = None
     completion_time: Optional[int] = None
-    timeout: Optional[int] = None   # absolute sim_time when request expires
+    timeout: Optional[float] = None  # absolute sim_time when request expires
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +145,8 @@ class MatchingContext:
         self._drivers = drivers
         self._requests = requests
         self.config = config
+        self.candidate_pairs_considered = 0
+        self.matcher_metrics: Counter[str] = Counter()
 
     @property
     def sim_time(self) -> int:
@@ -168,6 +173,11 @@ class MatchingContext:
         steps = -(-self.manhattan_distance(a, b) // self.config.driver_speed)  # ceil div
         return steps * self.config.timestep
 
+    def pickup_distance(self, driver: Driver, request: PassengerRequest) -> int:
+        """Record one driver-request evaluation and return pickup distance."""
+        self.candidate_pairs_considered += 1
+        return self.manhattan_distance(driver.position, request.pickup)
+
 
 # ---------------------------------------------------------------------------
 # Step and run results
@@ -189,6 +199,7 @@ class SimResult:
     events: list[dict]
     metrics: dict
     config: SimConfig
+    performance: dict = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +226,9 @@ class MatchingEnv:
                    request generation. Driver positions are simulated, not from data.
         trips_df:  Optional DataFrame with columns [request_time_seconds,
                    pickup_row, pickup_col, dropoff_row, dropoff_col, provider].
-                   If None, a tiny synthetic scenario is used (no TLC files needed).
+                   If None, no arrivals are scheduled. Use make_synthetic_trips
+                   to generate a scenario without TLC data.
+        profile_matching_memory: Trace allocations during each matcher call.
     """
 
     def __init__(
@@ -224,19 +237,29 @@ class MatchingEnv:
         config: SimConfig = SimConfig(),
         seed: int = 42,
         trips_df: Optional[pd.DataFrame] = None,
+        *,
+        profile_matching_memory: bool = False,
     ) -> None:
         self.matcher = matcher
         self.config = config
         self._seed = seed
         self._trips_df = trips_df
         self._rng = np.random.default_rng(seed)
+        self._profile_matching_memory = profile_matching_memory
 
         self.sim_time: int = 0
         self.drivers: dict[str, Driver] = {}
         self.requests: dict[str, PassengerRequest] = {}
-        self._pending_trips: list[dict] = []   # sorted by request_time_seconds
+        self._pending_trips: deque[dict] = deque()
         self._events: list[dict] = []
         self._request_counter: int = 0
+        self._candidate_pairs = 0
+        self._matcher_metrics: Counter[str] = Counter()
+        self._matching_calls = 0
+        self._matching_seconds = 0.0
+        self._simulation_seconds = 0.0
+        self._profiled_calls = 0
+        self._matching_peak_bytes = 0
 
     # ------------------------------------------------------------------
     # Public API
@@ -244,10 +267,17 @@ class MatchingEnv:
 
     def reset(self) -> None:
         """Reset simulation to t=0. Reproducible with the same seed."""
+        started = perf_counter()
         self._rng = np.random.default_rng(self._seed)
         self.sim_time = 0
         self._events = []
         self._request_counter = 0
+        self._candidate_pairs = 0
+        self._matcher_metrics.clear()
+        self._matching_calls = 0
+        self._matching_seconds = 0.0
+        self._profiled_calls = 0
+        self._matching_peak_bytes = 0
 
         # Driver starting positions are simulated (seeded RNG).
         # They are NOT directly observed from TLC data.
@@ -264,9 +294,12 @@ class MatchingEnv:
 
         self.requests = {}
         self._pending_trips = self._prepare_pending_trips()
+        self._inject_requests()
+        self._simulation_seconds = perf_counter() - started
 
     def step(self) -> StepResult:
         """Advance simulation by one timestep. Call reset() first."""
+        started = perf_counter()
         self.sim_time += self.config.timestep
 
         # 1. Inject new requests
@@ -280,7 +313,7 @@ class MatchingEnv:
         eligible = context.eligible_drivers()
         waiting = context.waiting_requests()
 
-        raw_assignments = self.matcher.match(eligible, waiting, context)
+        raw_assignments = self._measure_match(eligible, waiting, context)
         n_assigned = self._apply_assignments(raw_assignments)
 
         # 4. Move drivers and process arrivals
@@ -300,98 +333,141 @@ class MatchingEnv:
                 if r.status == RequestStatus.WAITING
             ),
         )
+        self._simulation_seconds += perf_counter() - started
         return result
 
     def run(self, n_steps: int) -> SimResult:
         """Run for n_steps steps and return a SimResult with metrics."""
+        started = perf_counter()
         self.reset()
         for _ in range(n_steps):
             self.step()
+        self._simulation_seconds = perf_counter() - started
         return SimResult(
             events=list(self._events),
             metrics=self.metrics(),
             config=self.config,
+            performance=self.performance_metrics(),
         )
+
+    def performance_metrics(self) -> dict:
+        """Wall-clock timings and optional traced allocation peak."""
+        return {
+            "total_matching_execution_seconds": self._matching_seconds,
+            "avg_matching_execution_seconds_per_timestep": (
+                self._matching_seconds / self._matching_calls if self._matching_calls else nan
+            ),
+            "total_simulation_execution_seconds": self._simulation_seconds,
+            "peak_matching_memory_bytes": (
+                self._matching_peak_bytes
+                if self._matching_calls and self._profiled_calls == self._matching_calls
+                else None
+            ),
+            "matching_memory_profiled_timesteps": self._profiled_calls,
+        }
+
+    def _measure_match(self, eligible, waiting, context):
+        # tracemalloc is process-wide. Leave an existing tracing session alone.
+        trace = self._profile_matching_memory and not tracemalloc.is_tracing()
+        if trace:
+            tracemalloc.start()
+        started = perf_counter()
+        try:
+            return self.matcher.match(eligible, waiting, context)
+        finally:
+            elapsed = perf_counter() - started
+            if trace:
+                _, peak = tracemalloc.get_traced_memory()
+                tracemalloc.stop()
+                self._matching_peak_bytes = max(self._matching_peak_bytes, peak)
+                self._profiled_calls += 1
+            self._matching_seconds += elapsed
+            self._matching_calls += 1
+            self._candidate_pairs += context.candidate_pairs_considered
+            self._matcher_metrics.update(context.matcher_metrics)
 
     def metrics(self) -> dict:
-        """Compute KPIs from the event log."""
+        """Compute deterministic outcome and workload metrics."""
+        requests = self.requests.values()
+        assigned = [r for r in requests if r.assignment_time is not None]
+        picked_up = [r for r in requests if r.actual_simulated_pickup_time is not None]
         completed = [
-            r for r in self.requests.values()
+            r for r in requests
             if r.status == RequestStatus.COMPLETED
         ]
-        all_terminal = [
-            r for r in self.requests.values()
-            if r.status in (RequestStatus.COMPLETED, RequestStatus.EXPIRED)
-        ]
-        arrived = [
-            r for r in self.requests.values()
-            if r.status != RequestStatus.WAITING  # at least assigned
-        ]
-
-        # Average waiting time: request_time -> actual_simulated_pickup_time
-        wait_times = [
-            r.actual_simulated_pickup_time - r.request_time
-            for r in completed
-            if r.actual_simulated_pickup_time is not None
-        ]
-        avg_wait = float(np.mean(wait_times)) if wait_times else float("nan")
-
-        # Order response rate: completed / (completed + expired)
+        n_requests = len(requests)
         n_completed = len(completed)
-        n_expired = sum(1 for r in self.requests.values() if r.status == RequestStatus.EXPIRED)
-        total_terminal = n_completed + n_expired
-        response_rate = n_completed / total_terminal if total_terminal > 0 else float("nan")
+        n_expired = sum(r.status == RequestStatus.EXPIRED for r in requests)
 
-        # Vehicle utilization: fraction of driver-steps spent ON_TRIP
-        on_trip_events = [e for e in self._events if e["event"] == "pickup"]
-        completion_events = [e for e in self._events if e["event"] == "completion"]
-        total_on_trip_steps = sum(
-            (e["sim_time"] - _find_pickup_time(e["request_id"], on_trip_events))
-            for e in completion_events
-            if _find_pickup_time(e["request_id"], on_trip_events) is not None
+        def ratio(numerator, denominator):
+            return numerator / denominator if denominator else nan
+
+        total_on_trip_time = sum(
+            (r.completion_time if r.completion_time is not None else self.sim_time)
+            - r.actual_simulated_pickup_time
+            for r in picked_up
+        )
+        total_enroute_time = sum(
+            (r.actual_simulated_pickup_time if r.actual_simulated_pickup_time is not None else self.sim_time)
+            - r.assignment_time
+            for r in assigned
         )
         total_driver_time = self.config.n_drivers * self.sim_time
-        utilization = (
-            total_on_trip_steps / total_driver_time if total_driver_time > 0 else float("nan")
-        )
 
-        # Average detour ratio: actual trip distance / direct pickup->dropoff distance
+        pickup_distances = {
+            e["request_id"]: MatchingContext.manhattan_distance(e["driver_position"], e["pickup"])
+            for e in self._events if e["event"] == "assignment"
+        }
+        completed_wait = []
         detour_ratios = []
         for r in completed:
+            if r.actual_simulated_pickup_time is not None:
+                completed_wait.append(r.actual_simulated_pickup_time - r.request_time)
             direct = MatchingContext.manhattan_distance(r.pickup, r.dropoff)
-            if direct > 0 and r.assigned_driver_id is not None:
-                assign_ev = next(
-                    (e for e in self._events
-                     if e["event"] == "assignment" and e["request_id"] == r.id),
-                    None,
-                )
-                if assign_ev is not None:
-                    driver_pos = assign_ev.get("driver_position")
-                    if driver_pos is not None:
-                        actual = (
-                            MatchingContext.manhattan_distance(driver_pos, r.pickup) + direct
-                        )
-                        detour_ratios.append(actual / direct)
-        avg_detour = float(np.mean(detour_ratios)) if detour_ratios else float("nan")
+            if direct > 0 and r.id in pickup_distances:
+                detour_ratios.append((pickup_distances[r.id] + direct) / direct)
+        traveled_pickup_distances = [pickup_distances[r.id] for r in picked_up if r.id in pickup_distances]
 
         return {
-            "avg_wait_seconds": avg_wait,
-            "order_response_rate": response_rate,
-            "vehicle_utilization": utilization,
-            "avg_detour_ratio": avg_detour,
+            **self._matcher_metrics,
+            "n_requests_total": n_requests,
+            "n_assignments": len(assigned),
+            "n_pickups": len(picked_up),
             "n_completed": n_completed,
             "n_expired": n_expired,
-            "n_requests_total": len(self.requests),
+            "n_unfinished": n_requests - n_completed - n_expired,
+            "assignment_rate": ratio(len(assigned), n_requests),
+            "pickup_rate": ratio(len(picked_up), n_requests),
+            "trip_completion_rate": ratio(n_completed, n_requests),
+            "avg_request_to_assignment_seconds": ratio(
+                sum(r.assignment_time - r.request_time for r in assigned), len(assigned)
+            ),
+            "avg_request_to_pickup_seconds": ratio(
+                sum(r.actual_simulated_pickup_time - r.request_time for r in picked_up), len(picked_up)
+            ),
+            "avg_assignment_to_pickup_seconds": ratio(
+                sum(r.actual_simulated_pickup_time - r.assignment_time for r in picked_up), len(picked_up)
+            ),
+            "avg_pickup_distance_cells": ratio(sum(traveled_pickup_distances), len(traveled_pickup_distances)),
+            "vehicle_utilization": ratio(total_on_trip_time, total_driver_time),
+            "avg_idle_seconds_per_driver": ratio(
+                total_driver_time - total_on_trip_time - total_enroute_time, self.config.n_drivers
+            ),
+            "avg_completed_trips_per_driver": ratio(n_completed, self.config.n_drivers),
+            "candidate_pairs_considered": self._candidate_pairs,
+            "avg_wait_seconds": ratio(sum(completed_wait), len(completed_wait)),
+            "order_response_rate": ratio(n_completed, n_completed + n_expired),
+            "avg_detour_ratio": ratio(sum(detour_ratios), len(detour_ratios)),
         }
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _prepare_pending_trips(self) -> list[dict]:
-        """Convert trips_df to a sorted list of pending trip dicts."""
+    def _prepare_pending_trips(self) -> deque[dict]:
+        """Queue pending trips in chronological order."""
         if self._trips_df is None:
-            return []
+            return deque()
         required = {"request_time_seconds", "pickup_row", "pickup_col",
                     "dropoff_row", "dropoff_col"}
         missing = required - set(self._trips_df.columns)
@@ -399,17 +475,18 @@ class MatchingEnv:
             raise ValueError(f"trips_df missing columns: {missing}")
         trips = self._trips_df.to_dict("records")
         trips.sort(key=lambda t: t["request_time_seconds"])
-        return trips
+        return deque(trips)
 
     def _inject_requests(self) -> None:
         """Inject all pending trips whose request_time <= sim_time."""
         while self._pending_trips and \
                 self._pending_trips[0]["request_time_seconds"] <= self.sim_time:
-            t = self._pending_trips.pop(0)
+            t = self._pending_trips.popleft()
             self._create_request(
                 pickup=(int(t["pickup_row"]), int(t["pickup_col"])),
                 dropoff=(int(t["dropoff_row"]), int(t["dropoff_col"])),
                 provider=str(t.get("provider", "unknown")),
+                request_time=float(t["request_time_seconds"]),
             )
 
     def _create_request(
@@ -417,11 +494,14 @@ class MatchingEnv:
         pickup: tuple[int, int],
         dropoff: tuple[int, int],
         provider: str = "synthetic",
+        request_time: Optional[float] = None,
     ) -> PassengerRequest:
+        if request_time is None:
+            request_time = self.sim_time
         self._request_counter += 1
         rid = f"r{self._request_counter}"
         timeout = (
-            self.sim_time + self.config.request_timeout
+            request_time + self.config.request_timeout
             if self.config.request_timeout is not None
             else None
         )
@@ -430,12 +510,13 @@ class MatchingEnv:
             provider=provider,
             pickup=pickup,
             dropoff=dropoff,
-            request_time=self.sim_time,
+            request_time=request_time,
             timeout=timeout,
         )
         self.requests[rid] = req
         self._record("request_arrival", request_id=rid,
-                     pickup=pickup, dropoff=dropoff, provider=provider)
+                     pickup=pickup, dropoff=dropoff, provider=provider,
+                     request_time=request_time)
         return req
 
     def _expire_requests(self) -> int:
@@ -529,6 +610,8 @@ class MatchingEnv:
 
             if driver.status == DriverStatus.ENROUTE_PICKUP:
                 target = req.pickup
+                if driver.status_since == self.sim_time and driver.position != target:
+                    continue  # travel starts after the assignment boundary
                 driver.position = _step_toward(
                     driver.position, target, self.config.driver_speed
                 )
@@ -610,48 +693,38 @@ def _step_toward(
 
 
 # ---------------------------------------------------------------------------
-# Metrics helper
-# ---------------------------------------------------------------------------
-
-def _find_pickup_time(request_id: str, pickup_events: list[dict]) -> Optional[int]:
-    for e in pickup_events:
-        if e["request_id"] == request_id:
-            return e["sim_time"]
-    return None
-
-
-# ---------------------------------------------------------------------------
 # Dataset loader (optional — requires processed TLC data)
 # ---------------------------------------------------------------------------
 
 def load_trips_for_simulation(
     trips_path: Path = MANHATTAN_TRIPS,
     zone_map_path: Path = ZONE_GRID_MAP,
-    sim_start: pd.Timestamp = pd.Timestamp("2023-01-09 09:00:00"),  # Monday 9am
-    sim_duration_seconds: int = 3600,
+    sim_start: Optional[pd.Timestamp] = None,
+    sim_duration_seconds: Optional[int] = None,
     max_requests: Optional[int] = None,
 ) -> pd.DataFrame:
     """
     Load a window of TLC trips and convert to simulation request format.
 
     Returns a DataFrame with columns:
-        request_time_seconds  -- seconds since sim_start (int)
+        request_time_seconds  -- elapsed seconds since the scenario or window start
         pickup_row, pickup_col, dropoff_row, dropoff_col  -- grid cells (int)
         provider              -- str
 
     Taxi-zone representative points approximate trip positions within a zone.
     They are NOT actual GPS pickup/drop-off coordinates.
 
-    Requires:
-        data/processed/manhattan_trips.parquet
-        data/processed/zone_grid_map.json
+    Accepts prepared scenarios, unified TLC parquet, and legacy yellow parquet.
+    Prepared scenarios carry relative offsets that identify the original window.
+    Other files default to Jan 9 at 09:00 for one hour. Only yellow records
+    can use pickup time as an arrival proxy when request time is unavailable.
     """
     import json
 
     if not trips_path.exists():
         raise FileNotFoundError(
             f"Processed trips not found: {trips_path}\n"
-            "Run: python ride-share-marl/pipeline/load_tlc_data.py"
+            "Run load_tlc_data.py for yellow-only data or tlc_pipeline.py for unified data."
         )
     if not zone_map_path.exists():
         raise FileNotFoundError(
@@ -661,16 +734,45 @@ def load_trips_for_simulation(
 
     with open(zone_map_path) as f:
         raw_map = json.load(f)
-    zone_map = {int(k): tuple(v) for k, v in raw_map.items()}
+    zone_map = {
+        int(k): tuple(v) for k, v in raw_map.items()
+        if isinstance(v, list) and len(v) == 2
+        and all(type(cell) is int and 0 <= cell < 10 for cell in v)
+    }
 
     df = pd.read_parquet(trips_path)
-    df["tpep_pickup_datetime"] = pd.to_datetime(df["tpep_pickup_datetime"])
+    prepared = {"request_datetime", "request_time_seconds"}.issubset(df.columns)
+    if "request_datetime" in df.columns:
+        request_at = pd.to_datetime(df["request_datetime"], errors="coerce", format="mixed")
+        if "pickup_datetime" in df.columns:
+            yellow_pickup = pd.to_datetime(df["pickup_datetime"], errors="coerce", format="mixed")
+            request_at = request_at.fillna(yellow_pickup.where(df["provider"].eq("yellow")))
+    else:
+        request_at = pd.to_datetime(df["tpep_pickup_datetime"])
+        df["provider"] = "yellow"
 
-    sim_end = sim_start + pd.Timedelta(seconds=sim_duration_seconds)
-    window = df[
-        (df["tpep_pickup_datetime"] >= sim_start) &
-        (df["tpep_pickup_datetime"] < sim_end)
-    ].copy()
+    if sim_start is None:
+        sim_start = pd.Timestamp("2023-01-09 09:00:00")
+        if prepared:
+            offsets = pd.to_numeric(df["request_time_seconds"], errors="coerce")
+            origins = (
+                request_at.dt.floor("s") - pd.to_timedelta(np.floor(offsets), unit="s")
+            ).dropna().unique()
+            if len(origins) > 1:
+                raise ValueError("Prepared scenario has inconsistent request time offsets")
+            if len(origins) == 1:
+                sim_start = origins[0]
+    sim_start = pd.Timestamp(sim_start)
+    if sim_duration_seconds is None and not prepared:
+        sim_duration_seconds = 3600
+    in_window = request_at >= sim_start
+    if sim_duration_seconds is not None:
+        sim_end = sim_start + pd.Timedelta(seconds=sim_duration_seconds)
+        in_window &= request_at < sim_end
+    mapped = df["PULocationID"].isin(zone_map) & df["DOLocationID"].isin(zone_map)
+    eligible = in_window & mapped
+    window = df.loc[eligible].assign(arrival_time=request_at.loc[eligible])
+    window = window.sort_values("arrival_time", kind="stable")
 
     if max_requests is not None:
         window = window.head(max_requests)
@@ -679,23 +781,22 @@ def load_trips_for_simulation(
     for _, trip in window.iterrows():
         pu_id = int(trip["PULocationID"])
         do_id = int(trip["DOLocationID"])
-        if pu_id not in zone_map or do_id not in zone_map:
-            continue
         pu_r, pu_c = zone_map[pu_id]
         do_r, do_c = zone_map[do_id]
-        t_sec = int(
-            (trip["tpep_pickup_datetime"] - sim_start).total_seconds()
-        )
+        t_sec = (trip["arrival_time"] - sim_start) / pd.Timedelta(seconds=1)
         rows.append({
             "request_time_seconds": max(0, t_sec),
             "pickup_row": pu_r,
             "pickup_col": pu_c,
             "dropoff_row": do_r,
             "dropoff_col": do_c,
-            "provider": "yellow",
+            "provider": trip["provider"],
         })
 
-    return pd.DataFrame(rows).sort_values("request_time_seconds").reset_index(drop=True)
+    return pd.DataFrame(rows, columns=[
+        "request_time_seconds", "pickup_row", "pickup_col",
+        "dropoff_row", "dropoff_col", "provider",
+    ])
 
 
 # ---------------------------------------------------------------------------

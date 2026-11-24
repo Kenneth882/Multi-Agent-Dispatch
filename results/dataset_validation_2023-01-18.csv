@@ -1,0 +1,60 @@
+category,metric,value,detail
+method,request_date,2023-01-18,NYC local request time
+method,duration_seconds,1 to 36000,Inclusive pickup-to-dropoff duration
+method,deduplication,exact source rows,Includes optional source columns
+geography,zones_mapped,69,TLC polygon representative points in EPSG:2263
+geography,invalid_cells,0,"Both axes must be integers in [0, 9]"
+geography,occupied_cells,30,10x10 grid
+geography,saved_map_matches_rebuild,True,data/processed/zone_grid_map.json
+geography,lookup_zones_missing_from_geometry,0,
+geography,geometry_zones_missing_from_lookup,0,
+filter,original_monthly_records,18479031,Records remaining
+filter,required_values_present,18479031,Records remaining
+filter,parseable_timestamps,18479031,Records remaining
+filter,january_18_requests,554171,Records remaining
+filter,uber_or_lyft,554171,Records remaining
+filter,manhattan_pickup,237043,Records remaining
+filter,manhattan_dropoff,169099,Records remaining
+filter,valid_timestamp_order,166986,Records remaining
+filter,valid_trip_duration,166986,Records remaining
+filter,unique_records,166986,Records remaining
+filter,valid_pickup_and_dropoff_grid,166986,Records remaining
+mapping,pickup_missing_mapping,0,
+mapping,pickup_invalid_mapping,0,
+mapping,dropoff_missing_mapping,0,
+mapping,dropoff_invalid_mapping,0,
+mapping,requests_rejected_for_mapping,0,
+result,final_valid_passenger_requests,166986,All January 18 hours
+provider,uber,132861,Final valid requests
+provider,lyft,34125,Final valid requests
+hourly_demand,00:00,3028,NYC local time
+hourly_demand,01:00,1794,NYC local time
+hourly_demand,02:00,1111,NYC local time
+hourly_demand,03:00,691,NYC local time
+hourly_demand,04:00,697,NYC local time
+hourly_demand,05:00,1593,NYC local time
+hourly_demand,06:00,4440,NYC local time
+hourly_demand,07:00,8169,NYC local time
+hourly_demand,08:00,11153,NYC local time
+hourly_demand,09:00,9686,NYC local time
+hourly_demand,10:00,7233,NYC local time
+hourly_demand,11:00,6886,NYC local time
+hourly_demand,12:00,6976,NYC local time
+hourly_demand,13:00,6668,NYC local time
+hourly_demand,14:00,7138,NYC local time
+hourly_demand,15:00,7656,NYC local time
+hourly_demand,16:00,8380,NYC local time
+hourly_demand,17:00,12196,NYC local time
+hourly_demand,18:00,13091,NYC local time
+hourly_demand,19:00,11857,NYC local time
+hourly_demand,20:00,10872,NYC local time
+hourly_demand,21:00,10435,NYC local time
+hourly_demand,22:00,8986,NYC local time
+hourly_demand,23:00,6250,NYC local time
+scenario,midday_available_requests,20530,"[11:00, 14:00)"
+scenario,midday_selected_requests,20530,seed=42
+scenario,midday_fixed_seed_repeat_matches,not sampled,seed=42
+scenario,peak_available_requests,37144,"[17:00, 20:00)"
+scenario,peak_selected_requests,37144,seed=42
+scenario,peak_fixed_seed_repeat_matches,not sampled,seed=42
+status,trip_validation,complete,

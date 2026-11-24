@@ -1,45 +1,16 @@
-"""
-matching/sparse.py
--------------------
-Sparse matching with a distance cutoff (SP2).
+"""Exact distance-limited matching over a CSR bipartite graph."""
 
-Only driver-request pairs within `max_distance` Manhattan cells are
-considered eligible. The eligible subproblem is solved optimally with the
-Hungarian algorithm, so within-range assignments are globally optimal.
+from collections import defaultdict
 
-Pairs beyond the cutoff are assigned cost _SENTINEL and are never selected.
-If no driver-request pair is within range, an empty list is returned.
-
-This reduces computation in large, sparse scenarios where most drivers are
-far from most requests, and models realistic dispatch constraints (e.g. a
-driver in Inwood should not be dispatched to Battery Park).
-
-Known limitations
------------------
-- The cost matrix is still built for all D×R pairs before filtering. For a
-  10×10 grid with ≤20 drivers this is negligible, but a true sparse
-  implementation would only build the submatrix of eligible pairs.
-- The cutoff is a hard Euclidean (Manhattan) threshold, not a travel-time
-  threshold. In a real network, travel time depends on road topology.
-
-Time complexity: O(D×R) to build cost matrix + O(min(D,R)³) for Hungarian.
-"""
 import numpy as np
-from scipy.optimize import linear_sum_assignment
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import min_weight_full_bipartite_matching
 
 from matching.base import BaseMatcher
 
-_SENTINEL = 10 ** 6
-
 
 class SparseMatcher(BaseMatcher):
-    """
-    Batch matching restricted to driver-request pairs within max_distance cells.
-
-    Args:
-        max_distance: Maximum Manhattan distance for a driver-request pair to
-                      be eligible. Default 3 cells (≈ 30% of the 10-cell grid).
-    """
+    """Maximize feasible matches, then minimize total Manhattan pickup distance."""
 
     def __init__(self, max_distance: int = 3):
         if max_distance < 0:
@@ -50,29 +21,74 @@ class SparseMatcher(BaseMatcher):
         if not eligible_drivers or not waiting_requests:
             return []
 
-        drivers = sorted(eligible_drivers, key=lambda d: d.id)
-        requests = sorted(waiting_requests, key=lambda r: r.id)
+        drivers = sorted(eligible_drivers, key=lambda driver: driver.id)
+        requests = sorted(waiting_requests, key=lambda request: request.id)
+        driver_cells = [driver.position for driver in drivers]
+        request_cells = [request.pickup for request in requests]
 
-        n_d = len(drivers)
-        n_r = len(requests)
-
-        cost = np.full((n_d, n_r), _SENTINEL, dtype=np.int64)
-        any_eligible = False
-        for i, driver in enumerate(drivers):
-            for j, req in enumerate(requests):
-                d = context.manhattan_distance(driver.position, req.pickup)
-                if d <= self.max_distance:
-                    cost[i, j] = d
-                    any_eligible = True
-
-        if not any_eligible:
+        # Put the smaller partition on the row side to limit augmentations
+        # and the number of private unmatched columns.
+        drivers_are_rows = len(drivers) <= len(requests)
+        row_cells, col_cells = (
+            (driver_cells, request_cells) if drivers_are_rows else (request_cells, driver_cells)
+        )
+        grid_size = context.config.grid_size
+        radius = int(min(self.max_distance, 2 * (grid_size - 1)))
+        graph, real_edge_count = _build_graph(row_cells, col_cells, grid_size, radius)
+        context.candidate_pairs_considered += real_edge_count
+        if graph is None:
             return []
 
-        row_ind, col_ind = linear_sum_assignment(cost)
+        row_indices, col_indices = min_weight_full_bipartite_matching(graph)
+        matches = [
+            (row, col) if drivers_are_rows else (col, row)
+            for row, col in zip(row_indices, col_indices)
+            if col < len(col_cells)
+        ]
+        return [(drivers[d].id, requests[r].id) for d, r in sorted(matches)]
 
-        assignments = []
-        for i, j in zip(row_ind, col_ind):
-            if cost[i, j] < _SENTINEL:
-                assignments.append((drivers[i].id, requests[j].id))
 
-        return assignments
+def _build_graph(row_cells, col_cells, grid_size, radius):
+    """Build CSR directly from grid buckets and one private dummy per row."""
+    columns_by_cell = defaultdict(list)
+    for column, cell in enumerate(col_cells):
+        columns_by_cell[cell].append(column)
+
+    # Rows sharing a cell reuse the same eligible columns and shifted costs.
+    neighbors = {}
+    for row, col in dict.fromkeys(row_cells):
+        edges = []
+        for y in range(max(0, row - radius), min(grid_size, row + radius + 1)):
+            remaining = radius - abs(row - y)
+            for x in range(max(0, col - remaining), min(grid_size, col + remaining + 1)):
+                weight = 1 + abs(row - y) + abs(col - x)
+                edges.extend((index, weight) for index in columns_by_cell.get((y, x), ()))
+        edges.sort()
+        neighbors[row, col] = np.asarray(edges, dtype=np.intp).reshape(-1, 2)
+
+    n_rows, n_cols = len(row_cells), len(col_cells)
+    real_edge_count = sum(len(neighbors[cell]) for cell in row_cells)
+    if not real_edge_count:
+        return None, 0
+
+    # An extra dummy costs more than the largest possible total real cost.
+    # A shift of +1 keeps co-located pairs explicit and leaves equal-cardinality
+    # distance comparisons unchanged.
+    dummy_cost = n_rows * (radius + 1) + 1
+    edge_count = real_edge_count + n_rows
+    index_dtype = np.int32 if max(edge_count, n_cols + n_rows) <= np.iinfo(np.int32).max else np.int64
+    data = np.empty(edge_count, dtype=np.float64)
+    indices = np.empty(edge_count, dtype=index_dtype)
+    indptr = np.empty(n_rows + 1, dtype=index_dtype)
+    indptr[0] = 0
+    for row, cell in enumerate(row_cells):
+        edges = neighbors[cell]
+        start = indptr[row]
+        end = start + len(edges)
+        indices[start:end] = edges[:, 0]
+        data[start:end] = edges[:, 1]
+        indices[end] = n_cols + row
+        data[end] = dummy_cost
+        indptr[row + 1] = end + 1
+    graph = csr_matrix((data, indices, indptr), shape=(n_rows, n_cols + n_rows))
+    return graph, real_edge_count

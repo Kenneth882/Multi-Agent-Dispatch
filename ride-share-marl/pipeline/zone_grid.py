@@ -214,7 +214,6 @@ def visualize_zone_grid(
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
     from matplotlib.colors import Normalize
-    from matplotlib.cm import get_cmap
 
     if zone_map is None:
         zone_map = build_zone_grid_map(shapefile_path, grid_size)
@@ -232,7 +231,7 @@ def visualize_zone_grid(
 
     fig, ax = plt.subplots(figsize=(8, 14))
 
-    cmap = get_cmap("tab20", grid_size * grid_size)
+    cmap = plt.get_cmap("tab20", grid_size * grid_size)
     norm = Normalize(vmin=0, vmax=grid_size * grid_size - 1)
     manhattan.plot(
         ax=ax,

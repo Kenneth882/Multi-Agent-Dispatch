@@ -70,7 +70,7 @@ class GreedyMatcher(BaseMatcher):
             best_driver = None
             best_dist = float("inf")
             for driver in available_drivers:
-                d = context.manhattan_distance(driver.position, req.pickup)
+                d = context.pickup_distance(driver, req)
                 if self.pickup_radius is not None and d > self.pickup_radius:
                     continue
                 if d < best_dist or (d == best_dist and driver.id < best_driver.id):

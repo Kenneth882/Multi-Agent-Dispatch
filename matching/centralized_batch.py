@@ -10,11 +10,10 @@ Objective
 2. Among all maximum-cardinality matchings, minimize total Manhattan pickup
    distance.
 
-This is implemented by assigning a large sentinel cost (_SENTINEL) to
-infeasible pairs. The Hungarian algorithm then naturally avoids them unless
-no feasible alternative exists, which cannot happen because infeasible pairs
-are only selected when the number of drivers exceeds the number of feasible
-requests (the extra drivers are left unmatched via the sentinel filter).
+Infeasible pairs receive a sentinel cost that dominates the total feasible
+distance on the 10x10 simulation grid. The rectangular solver can select
+sentinel entries when no full feasible assignment exists. Those entries are
+discarded, leaving the corresponding drivers and requests unmatched.
 
 max_pickup_distance
 -------------------
@@ -72,7 +71,7 @@ class CentralizedBatchMatcher(BaseMatcher):
         cost = np.full((n_d, n_r), _SENTINEL, dtype=np.int64)
         for i, driver in enumerate(drivers):
             for j, req in enumerate(requests):
-                d = context.manhattan_distance(driver.position, req.pickup)
+                d = context.pickup_distance(driver, req)
                 if self.max_pickup_distance is None or d <= self.max_pickup_distance:
                     cost[i, j] = d
 
